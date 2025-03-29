@@ -12,10 +12,16 @@ const JUMP_FORCE = -8;
 const GAME_WIDTH = 800;
 const GAME_HEIGHT = 700;
 const PIPE_WIDTH = 80;
-const PIPE_GAP = 200;
-const PIPE_SPEED = 3;
+const INITIAL_PIPE_GAP = 200;
+const INITIAL_PIPE_SPEED = 3;
 const PIPE_INTERVAL = 120; // frames between new pipe pairs
 const PLAYER_SIZE = 80;
+
+// Difficulty progression constants
+const SPEED_INCREMENT = 0.4; // How much to increase speed per difficulty level
+const GAP_DECREMENT = 10; // How much to decrease gap per difficulty level
+const SCORE_PER_LEVEL = 3; // How many points to increase difficulty
+const GRAVITY_INCREMENT = 0.03; // How much to increase gravity per difficulty level
 
 // Game interfaces
 interface PlayerState {
@@ -43,10 +49,14 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
   const [gameOver, setGameOver] = useState(false);
   const [gameStarted, setGameStarted] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [difficultyLevel, setDifficultyLevel] = useState(1);
+  const [pipeSpeed, setPipeSpeed] = useState(INITIAL_PIPE_SPEED);
+  const [pipeGap, setPipeGap] = useState(INITIAL_PIPE_GAP);
   
   const gameLoopRef = useRef<number>();
   const frameCountRef = useRef<number>(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const backgroundMusicRef = useRef<HTMLAudioElement | null>(null);
   
   // Load images refs
   const playerImageRef = useRef<HTMLImageElement | null>(null);
@@ -73,6 +83,30 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
     // Load logo image
     logoImageRef.current = new Image();
     logoImageRef.current.src = '/images/flappykain/flappykain.png';
+
+    // Load background music - use .mp3 instead of .mid (browsers don't support MIDI well)
+    try {
+      backgroundMusicRef.current = new Audio('/sounds/aliens_exist.mp3');
+      backgroundMusicRef.current.loop = true;
+      backgroundMusicRef.current.volume = 0.7;
+      
+      // Preload the audio file
+      backgroundMusicRef.current.load();
+      
+      // Log when audio is ready
+      backgroundMusicRef.current.addEventListener('canplaythrough', () => {
+        console.log('Audio file loaded and ready to play');
+      });
+      
+      // Log any errors with audio loading
+      backgroundMusicRef.current.addEventListener('error', (e) => {
+        console.error('Error loading audio file:', e);
+        console.error('Audio error code:', backgroundMusicRef.current?.error?.code);
+        console.error('Audio error message:', backgroundMusicRef.current?.error?.message);
+      });
+    } catch (error) {
+      console.error('Error setting up audio:', error);
+    }
 
     // Handle resize to make the canvas responsive
     const handleResize = () => {
@@ -106,7 +140,7 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
     };
   }, [isActive]);
   
-  // Game reset function
+  // Reset function now resets difficulty settings too
   const resetGame = useCallback(() => {
     setPlayer({
       x: GAME_WIDTH * 0.2,
@@ -118,6 +152,15 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
     setGameOver(false);
     setGameStarted(false);
     frameCountRef.current = 0;
+    setDifficultyLevel(1);
+    setPipeSpeed(INITIAL_PIPE_SPEED);
+    setPipeGap(INITIAL_PIPE_GAP);
+    
+    // Stop music when resetting the game
+    if (backgroundMusicRef.current) {
+      backgroundMusicRef.current.pause();
+      backgroundMusicRef.current.currentTime = 0;
+    }
   }, []);
   
   // Initialize game when component mounts
@@ -136,7 +179,7 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
   // Generate a new pipe
   const generatePipe = useCallback(() => {
     const minTopHeight = 50;
-    const maxTopHeight = GAME_HEIGHT - PIPE_GAP - 50;
+    const maxTopHeight = GAME_HEIGHT - pipeGap - 50; // Use current pipeGap
     const topHeight = Math.floor(Math.random() * (maxTopHeight - minTopHeight + 1)) + minTopHeight;
     
     return {
@@ -145,7 +188,69 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
       id: Date.now(),
       passed: false
     };
-  }, []);
+  }, [pipeGap]);
+  
+  // Update difficulty based on score
+  useEffect(() => {
+    // Calculate what the difficulty level should be based on score
+    const newLevel = Math.floor(score / SCORE_PER_LEVEL) + 1;
+    
+    // Only update if difficulty has increased
+    if (newLevel > difficultyLevel) {
+      setDifficultyLevel(newLevel);
+      
+      // Increase pipe speed
+      setPipeSpeed(INITIAL_PIPE_SPEED + (newLevel - 1) * SPEED_INCREMENT);
+      
+      // Decrease pipe gap, but don't make it too small
+      const newGap = Math.max(
+        INITIAL_PIPE_GAP - (newLevel - 1) * GAP_DECREMENT, 
+        100 // Minimum pipe gap
+      );
+      setPipeGap(newGap);
+    }
+  }, [score, difficultyLevel]);
+  
+  // Control background music based on game state
+  useEffect(() => {
+    const music = backgroundMusicRef.current;
+    if (!music) return;
+    
+    // Only play during active gameplay
+    if (isActive && gameStarted && !gameOver && !isPaused) {
+      // Try to play the music - this may fail if the user hasn't interacted with the page yet
+      try {
+        const playPromise = music.play();
+        
+        if (playPromise !== undefined) {
+          playPromise.catch(error => {
+            // Auto-play was prevented - we'll rely on user interaction to start
+            console.error("Audio autoplay prevented:", error);
+          });
+        }
+        
+        console.log("Attempting to play music, current time:", music.currentTime);
+      } catch (error) {
+        console.error("Error playing audio:", error);
+      }
+    } else {
+      // Stop music if game is not active
+      try {
+        music.pause();
+      } catch (error) {
+        console.error("Error pausing audio:", error);
+      }
+    }
+    
+    return () => {
+      // Clean up on unmount or when deps change
+      try {
+        music.pause();
+      } catch (error) {
+        console.error("Error cleaning up audio:", error);
+      }
+    };
+  }, [isActive, gameStarted, gameOver, isPaused]);
   
   // Handle keyboard and touch controls
   useEffect(() => {
@@ -159,6 +264,10 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
         } else {
           if (!gameStarted) {
             setGameStarted(true);
+            // Try to start music when game starts via user interaction
+            if (backgroundMusicRef.current) {
+              backgroundMusicRef.current.play().catch(e => console.log("Couldn't play audio:", e));
+            }
           }
           // Jump
           setPlayer(prev => ({
@@ -175,6 +284,11 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
       }
       
       if (e.key === 'Escape') {
+        // Stop music before closing
+        if (backgroundMusicRef.current) {
+          backgroundMusicRef.current.pause();
+          backgroundMusicRef.current.currentTime = 0;
+        }
         onClose();
       }
     };
@@ -186,6 +300,10 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
       } else {
         if (!gameStarted) {
           setGameStarted(true);
+          // Try to start music when game starts via user interaction
+          if (backgroundMusicRef.current) {
+            backgroundMusicRef.current.play().catch(e => console.log("Couldn't play audio:", e));
+          }
         }
         // Jump
         setPlayer(prev => ({
@@ -234,7 +352,8 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
       }
       
       // Check if player is hitting bottom pipe - add a small buffer
-      if (playerBottom > pipeState.topHeight + PIPE_GAP + 5) {
+      // Use the current gap value from state
+      if (playerBottom > pipeState.topHeight + pipeGap + 5) {
         return true;
       }
     }
@@ -245,18 +364,20 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
     }
     
     return false;
-  }, []);
+  }, [pipeGap]);
   
-  // Game loop using requestAnimationFrame
+  // Game loop - updated to use current pipeSpeed and difficulty-based gravity
   useEffect(() => {
     if (!isActive || !gameStarted || gameOver || isPaused) return;
     
     const gameLoop = () => {
       frameCountRef.current++;
       
-      // Update player position
+      // Update player position with difficulty-adjusted gravity
       setPlayer(prev => {
-        const newVelocity = prev.velocity + GRAVITY;
+        // Increase gravity based on difficulty level
+        const difficultyGravity = GRAVITY + (difficultyLevel - 1) * GRAVITY_INCREMENT;
+        const newVelocity = prev.velocity + difficultyGravity;
         const newY = prev.y + newVelocity;
         
         return {
@@ -268,10 +389,10 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
       
       // Update pipes and check collisions
       setPipes(prev => {
-        // Move existing pipes
+        // Move existing pipes - use current pipeSpeed
         const movedPipes = prev.map(pipe => ({
           ...pipe,
-          x: pipe.x - PIPE_SPEED
+          x: pipe.x - pipeSpeed
         }));
         
         // Add new pipe at interval
@@ -303,7 +424,6 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
       });
       
       // Improved collision check - only check if we're past the first few frames of gameplay
-      // This helps prevent accidental game over at the start
       if (frameCountRef.current > 30) {
         let collision = false;
         pipes.forEach(pipe => {
@@ -314,6 +434,10 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
         
         if (collision) {
           setGameOver(true);
+          // Stop music on game over
+          if (backgroundMusicRef.current) {
+            backgroundMusicRef.current.pause();
+          }
         }
       }
       
@@ -328,9 +452,274 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
         cancelAnimationFrame(gameLoopRef.current);
       }
     };
-  }, [isActive, gameStarted, gameOver, isPaused, player, pipes, generatePipe, checkCollision, highScore]);
+  }, [isActive, gameStarted, gameOver, isPaused, player, pipes, generatePipe, checkCollision, highScore, pipeSpeed, difficultyLevel]);
   
-  // Render game with Canvas
+  // Draw pipes - updated to use current pipeGap
+  const drawPipes = useCallback((ctx: CanvasRenderingContext2D) => {
+    ctx.save();
+    pipes.forEach(pipe => {
+      // Draw top pipe
+      if (pipeImageRef.current && pipeImageRef.current.complete) {
+        // Get natural dimensions of the pipe image
+        const pipeNaturalWidth = pipeImageRef.current.naturalWidth;
+        const pipeNaturalHeight = pipeImageRef.current.naturalHeight;
+        
+        // Calculate aspect ratio of the pipe image
+        const pipeAspectRatio = pipeNaturalHeight / pipeNaturalWidth;
+        
+        // Maintain aspect ratio when drawing the pipe
+        const pipeVisualHeight = pipe.topHeight;
+        const pipeVisualWidth = PIPE_WIDTH;
+        
+        // Draw top pipe (flipped)
+        ctx.save();
+        ctx.translate(pipe.x + pipeVisualWidth / 2, pipe.topHeight / 2);
+        ctx.rotate(Math.PI);
+        ctx.drawImage(
+          pipeImageRef.current, 
+          -pipeVisualWidth / 2, 
+          -pipeVisualHeight / 2, 
+          pipeVisualWidth, 
+          pipeVisualHeight
+        );
+        ctx.restore();
+        
+        // Draw bottom pipe - use current pipeGap
+        ctx.drawImage(
+          pipeImageRef.current, 
+          pipe.x, 
+          pipe.topHeight + pipeGap, 
+          pipeVisualWidth, 
+          GAME_HEIGHT - (pipe.topHeight + pipeGap)
+        );
+      } else {
+        // Fallback if image not loaded
+        ctx.fillStyle = 'rgb(0, 200, 0)';
+        // Top pipe
+        ctx.fillRect(pipe.x, 0, PIPE_WIDTH, pipe.topHeight);
+        // Bottom pipe - use current pipeGap
+        ctx.fillRect(
+          pipe.x, 
+          pipe.topHeight + pipeGap, 
+          PIPE_WIDTH, 
+          GAME_HEIGHT - (pipe.topHeight + pipeGap)
+        );
+      }
+    });
+    ctx.restore();
+  }, [pipes, pipeGap]);
+  
+  // Updated difficulty indicator to show more information
+  const drawDifficultyIndicator = useCallback((ctx: CanvasRenderingContext2D) => {
+    if (gameStarted && !gameOver && !isPaused) {
+      ctx.save();
+      
+      // Position in top right corner
+      const x = GAME_WIDTH - 10;
+      const y = 40;
+      
+      // Create color based on difficulty level (green to yellow to red)
+      const r = Math.min(255, 100 + (difficultyLevel * 15));
+      const g = Math.max(100, 255 - (difficultyLevel * 15));
+      const b = 50;
+      const color = `rgb(${r}, ${g}, ${b})`;
+      
+      // Draw level indicator with glow effect that matches the difficulty color
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = color;
+      ctx.font = 'bold 20px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(`Level: ${difficultyLevel}`, x, y);
+      
+      // Show actual gap size and speed for debug/feedback (smaller text below)
+      ctx.shadowBlur = 0;
+      ctx.font = '14px sans-serif';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.fillText(`Speed: ${pipeSpeed.toFixed(1)}`, x, y + 20);
+      ctx.fillText(`Gap: ${pipeGap}`, x, y + 40);
+      
+      ctx.restore();
+    }
+  }, [gameStarted, gameOver, isPaused, difficultyLevel, pipeSpeed, pipeGap]);
+  
+  // Updated game over screen with more prominent score display
+  const drawGameOverScreen = useCallback((ctx: CanvasRenderingContext2D) => {
+    if (!gameOver) return;
+    
+    // Dark overlay
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+    
+    // Draw logo above Game Over text with proper aspect ratio
+    if (logoImageRef.current && logoImageRef.current.complete) {
+      // Get the natural dimensions of the logo image
+      const logoNaturalWidth = logoImageRef.current.naturalWidth;
+      const logoNaturalHeight = logoImageRef.current.naturalHeight;
+      
+      // Calculate appropriate display dimensions while maintaining aspect ratio
+      const maxLogoWidth = 300;
+      const logoScale = Math.min(maxLogoWidth / logoNaturalWidth, 1);
+      const logoWidth = logoNaturalWidth * logoScale;
+      const logoHeight = logoNaturalHeight * logoScale;
+      
+      // Position logo
+      const logoX = GAME_WIDTH / 2 - logoWidth / 2;
+      const logoY = GAME_HEIGHT * 0.15 - logoHeight / 2;
+      
+      // Add a dark semi-transparent panel behind the logo for better contrast
+      ctx.fillStyle = 'rgba(10, 15, 40, 0.6)';
+      ctx.fillRect(
+        logoX - 10, 
+        logoY - 10, 
+        logoWidth + 20, 
+        logoHeight + 20
+      );
+      
+      // Draw logo with glow effect
+      ctx.save();
+      ctx.shadowColor = 'rgba(100, 200, 255, 0.8)';
+      ctx.shadowBlur = 10;
+      ctx.drawImage(
+        logoImageRef.current, 
+        logoX, 
+        logoY, 
+        logoWidth, 
+        logoHeight
+      );
+      ctx.restore();
+    }
+    
+    // GAME OVER text
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 48px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', GAME_WIDTH / 2, GAME_HEIGHT * 0.28);
+    
+    // Create glowing container for final score
+    const scoreY = GAME_HEIGHT * 0.42;
+    const scoreBoxWidth = 300;
+    const scoreBoxHeight = 100;
+    const scoreBoxX = GAME_WIDTH / 2 - scoreBoxWidth / 2;
+    
+    // Animated glow for the score box
+    const time = Date.now() / 1000;
+    const glowSize = 10 + Math.sin(time * 2) * 5;
+    
+    // Score box with gradient background
+    ctx.save();
+    const scoreGradient = ctx.createLinearGradient(
+      scoreBoxX, scoreY, 
+      scoreBoxX + scoreBoxWidth, scoreY
+    );
+    scoreGradient.addColorStop(0, 'rgba(30, 60, 120, 0.7)');
+    scoreGradient.addColorStop(0.5, 'rgba(50, 100, 180, 0.8)');
+    scoreGradient.addColorStop(1, 'rgba(30, 60, 120, 0.7)');
+    
+    // Draw rounded rectangle for score box
+    ctx.fillStyle = scoreGradient;
+    ctx.shadowColor = 'rgba(100, 180, 255, 0.8)';
+    ctx.shadowBlur = glowSize;
+    
+    // Draw rounded rectangle manually
+    const radius = 10;
+    ctx.beginPath();
+    ctx.moveTo(scoreBoxX + radius, scoreY);
+    ctx.lineTo(scoreBoxX + scoreBoxWidth - radius, scoreY);
+    ctx.arcTo(scoreBoxX + scoreBoxWidth, scoreY, scoreBoxX + scoreBoxWidth, scoreY + radius, radius);
+    ctx.lineTo(scoreBoxX + scoreBoxWidth, scoreY + scoreBoxHeight - radius);
+    ctx.arcTo(scoreBoxX + scoreBoxWidth, scoreY + scoreBoxHeight, scoreBoxX + scoreBoxWidth - radius, scoreY + scoreBoxHeight, radius);
+    ctx.lineTo(scoreBoxX + radius, scoreY + scoreBoxHeight);
+    ctx.arcTo(scoreBoxX, scoreY + scoreBoxHeight, scoreBoxX, scoreY + scoreBoxHeight - radius, radius);
+    ctx.lineTo(scoreBoxX, scoreY + radius);
+    ctx.arcTo(scoreBoxX, scoreY, scoreBoxX + radius, scoreY, radius);
+    ctx.fill();
+    ctx.restore();
+    
+    // Display Final Score label
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.font = 'bold 24px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('FINAL SCORE', GAME_WIDTH / 2, scoreY + 30);
+    
+    // Display the actual score with a larger, glowing font
+    ctx.shadowColor = 'rgba(100, 200, 255, 0.9)';
+    ctx.shadowBlur = 15;
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 48px sans-serif';
+    ctx.fillText(`${score}`, GAME_WIDTH / 2, scoreY + 75);
+    ctx.restore();
+    
+    // Display high score
+    ctx.font = '22px sans-serif';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.fillText(`High Score: ${highScore}`, GAME_WIDTH / 2, scoreY + scoreBoxHeight + 30);
+    
+    // Display the difficulty level reached
+    ctx.fillStyle = 'rgba(255, 255, 160, 0.9)';
+    ctx.fillText(`Highest Level: ${difficultyLevel}`, GAME_WIDTH / 2, scoreY + scoreBoxHeight + 60);
+    
+    // Draw restart button
+    const buttonY = GAME_HEIGHT * 0.7;
+    const buttonWidth = 280;
+    const buttonHeight = 50;
+    const buttonX = GAME_WIDTH / 2 - buttonWidth / 2;
+    
+    // Button background with gradient
+    ctx.save();
+    const buttonGradient = ctx.createLinearGradient(
+      buttonX, buttonY, 
+      buttonX + buttonWidth, buttonY
+    );
+    buttonGradient.addColorStop(0, 'rgba(40, 80, 160, 0.7)');
+    buttonGradient.addColorStop(0.5, 'rgba(80, 140, 220, 0.8)');
+    buttonGradient.addColorStop(1, 'rgba(40, 80, 160, 0.7)');
+    
+    ctx.fillStyle = buttonGradient;
+    ctx.beginPath();
+    ctx.moveTo(buttonX + radius, buttonY);
+    ctx.lineTo(buttonX + buttonWidth - radius, buttonY);
+    ctx.arcTo(buttonX + buttonWidth, buttonY, buttonX + buttonWidth, buttonY + radius, radius);
+    ctx.lineTo(buttonX + buttonWidth, buttonY + buttonHeight - radius);
+    ctx.arcTo(buttonX + buttonWidth, buttonY + buttonHeight, buttonX + buttonWidth - radius, buttonY + buttonHeight, radius);
+    ctx.lineTo(buttonX + radius, buttonY + buttonHeight);
+    ctx.arcTo(buttonX, buttonY + buttonHeight, buttonX, buttonY + buttonHeight - radius, radius);
+    ctx.lineTo(buttonX, buttonY + radius);
+    ctx.arcTo(buttonX, buttonY, buttonX + radius, buttonY, radius);
+    ctx.fill();
+    
+    // Button border
+    ctx.strokeStyle = 'rgba(150, 200, 255, 0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+    
+    // Draw UFO icon beside the restart text if needed
+    if (playerImageRef.current && playerImageRef.current.complete) {
+      ctx.drawImage(
+        playerImageRef.current,
+        buttonX + 20,
+        buttonY + buttonHeight/2 - 15,
+        30, 30
+      );
+    }
+    
+    // Button text
+    ctx.save();
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Click or Press Space to Restart', GAME_WIDTH / 2, buttonY + 32);
+    ctx.restore();
+    
+    // ESC to exit text
+    ctx.fillStyle = 'rgba(200, 200, 200, 0.7)';
+    ctx.font = '18px sans-serif';
+    ctx.fillText('ESC to Exit', GAME_WIDTH / 2, buttonY + buttonHeight + 30);
+  }, [gameOver, score, highScore, difficultyLevel]);
+  
+  // Render game with Canvas (updated to use the new drawing functions)
   useEffect(() => {
     if (!isActive) return;
     
@@ -632,7 +1021,6 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
       return;
     }
     
-    // If game has started, use the normal rendering code
     // Clear canvas
     ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
     
@@ -660,57 +1048,7 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
     }
     
     // Draw pipes
-    ctx.save();
-    pipes.forEach(pipe => {
-      // Draw top pipe
-      if (pipeImageRef.current && pipeImageRef.current.complete) {
-        // Get natural dimensions of the pipe image
-        const pipeNaturalWidth = pipeImageRef.current.naturalWidth;
-        const pipeNaturalHeight = pipeImageRef.current.naturalHeight;
-        
-        // Calculate aspect ratio of the pipe image
-        const pipeAspectRatio = pipeNaturalHeight / pipeNaturalWidth;
-        
-        // Maintain aspect ratio when drawing the pipe
-        const pipeVisualHeight = pipe.topHeight;
-        const pipeVisualWidth = PIPE_WIDTH;
-        
-        // Draw top pipe (flipped)
-        ctx.save();
-        ctx.translate(pipe.x + pipeVisualWidth / 2, pipe.topHeight / 2);
-        ctx.rotate(Math.PI);
-        ctx.drawImage(
-          pipeImageRef.current, 
-          -pipeVisualWidth / 2, 
-          -pipeVisualHeight / 2, 
-          pipeVisualWidth, 
-          pipeVisualHeight
-        );
-        ctx.restore();
-        
-        // Draw bottom pipe
-        ctx.drawImage(
-          pipeImageRef.current, 
-          pipe.x, 
-          pipe.topHeight + PIPE_GAP, 
-          pipeVisualWidth, 
-          GAME_HEIGHT - (pipe.topHeight + PIPE_GAP)
-        );
-      } else {
-        // Fallback if image not loaded
-        ctx.fillStyle = 'rgb(0, 200, 0)';
-        // Top pipe
-        ctx.fillRect(pipe.x, 0, PIPE_WIDTH, pipe.topHeight);
-        // Bottom pipe
-        ctx.fillRect(
-          pipe.x, 
-          pipe.topHeight + PIPE_GAP, 
-          PIPE_WIDTH, 
-          GAME_HEIGHT - (pipe.topHeight + PIPE_GAP)
-        );
-      }
-    });
-    ctx.restore();
+    drawPipes(ctx);
     
     // Draw player (UFO)
     if (playerImageRef.current) {
@@ -748,72 +1086,12 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
     ctx.textAlign = 'center';
     ctx.fillText(score.toString(), GAME_WIDTH / 2, 80);
     
+    // Draw difficulty indicator
+    drawDifficultyIndicator(ctx);
+    
     // Draw game over screen
     if (gameOver) {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-      ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
-      
-      // Draw logo above Game Over text with proper aspect ratio
-      if (logoImageRef.current && logoImageRef.current.complete) {
-        // Get the natural dimensions of the logo image
-        const logoNaturalWidth = logoImageRef.current.naturalWidth;
-        const logoNaturalHeight = logoImageRef.current.naturalHeight;
-        
-        // Calculate appropriate display dimensions while maintaining aspect ratio
-        const maxLogoWidth = 300;
-        const logoScale = Math.min(maxLogoWidth / logoNaturalWidth, 1);
-        const logoWidth = logoNaturalWidth * logoScale;
-        const logoHeight = logoNaturalHeight * logoScale;
-        
-        // Position logo
-        const logoX = GAME_WIDTH / 2 - logoWidth / 2;
-        const logoY = GAME_HEIGHT / 4 - logoHeight / 2;
-        
-        // Add a dark semi-transparent panel behind the logo for better contrast
-        ctx.fillStyle = 'rgba(10, 15, 40, 0.6)';
-        ctx.fillRect(
-          logoX - 10, 
-          logoY - 10, 
-          logoWidth + 20, 
-          logoHeight + 20
-        );
-        
-        // Draw logo with glow effect
-        ctx.save();
-        ctx.shadowColor = 'rgba(100, 200, 255, 0.8)';
-        ctx.shadowBlur = 10;
-        ctx.drawImage(
-          logoImageRef.current, 
-          logoX, 
-          logoY, 
-          logoWidth, 
-          logoHeight
-        );
-        ctx.restore();
-      }
-      
-      ctx.fillStyle = 'white';
-      ctx.font = 'bold 48px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('GAME OVER', GAME_WIDTH / 2, GAME_HEIGHT / 3 + 60);
-      
-      ctx.font = '24px sans-serif';
-      ctx.fillText(`Score: ${score}`, GAME_WIDTH / 2, GAME_HEIGHT / 2);
-      ctx.fillText(`High Score: ${highScore}`, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 40);
-      
-      // Draw UFO icon beside the restart text
-      if (playerImageRef.current && playerImageRef.current.complete) {
-        ctx.drawImage(
-          playerImageRef.current,
-          GAME_WIDTH / 2 - 160,
-          GAME_HEIGHT / 2 + 78,
-          30,
-          30
-        );
-      }
-      
-      ctx.fillText('Click or Press Space to Restart', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 80);
-      ctx.fillText('ESC to Exit', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 120);
+      drawGameOverScreen(ctx);
     }
     
     // Draw pause screen
@@ -837,7 +1115,7 @@ const FlappyKainEasterEgg = ({ isActive, onClose }: FlappyKainEasterEggProps) =>
         requestAnimationFrame(() => {});
       }
     });
-  }, [isActive, player, pipes, gameStarted, gameOver, isPaused, score, highScore]);
+  }, [isActive, player, pipes, gameStarted, gameOver, isPaused, score, highScore, difficultyLevel, drawPipes, drawDifficultyIndicator, drawGameOverScreen]);
   
   return (
     <motion.div 
